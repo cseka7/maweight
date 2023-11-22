@@ -9,7 +9,8 @@ __all__= ['executable_version',
           'parameters_fast',
           'register_and_transform',
           'extract_features_3d',
-          'model_selection']
+          'model_selection',
+          'origin_to_center_of_mass']
 
 # to call OS services
 import sys
@@ -31,6 +32,10 @@ from scipy.stats import skew, kurtosis
 import shutil
 # to read/write 2d images
 import imageio
+#to center_of_mass_to_origin
+from copy import deepcopy
+from scipy.ndimage import center_of_mass
+import warnings
 
 # for model selection
 from sklearn.model_selection import RepeatedKFold
@@ -41,6 +46,47 @@ from sklearn.preprocessing import StandardScaler
 from sklearn.model_selection import RepeatedKFold
 
 from maweight.mltoolkit.automl import *
+
+def _load_image(name):
+    img = nib.load(name)
+    return img.get_fdata(), img.affine
+
+def _save_data_to_img(name, data, affine):
+    img = nib.Nifti1Image(data, affine)
+    nib.save(img, name)
+
+def origin_to_center_of_mass(image, masks=[], threshold = 0):
+    """ Set origin to image center of mass.
+        If necessary, we also move the given the mask(s) to keep them overlapping with the image.
+    Args:
+        image(str): image path
+        threshold: set threshold value, image values under threshold values are not included in the center of mass calculation
+        masks(list): path of the masks
+    """
+    print(f"Processing image: {image} and masks: {masks}")
+
+    data, affine = _load_image(image)
+    data = data.astype(np.int16)
+    # test non diagonal elements
+    size = len(affine)-1
+    off_dia_sum = sum([abs(affine[i][j]) for i in range(size) for j in range(size) if i != j])
+    if off_dia_sum > 0.00001:
+        warnings.warn("The image appears to contain rotation. Moving the center of mass of the image to the origin works perfectly only on images without rotation.")
+
+    com = np.array(center_of_mass(deepcopy(data)))
+    newaffine = deepcopy(affine)
+    newaffine[0:3, 3] = -com * np.sum(affine[0:3, 0:3], axis=0)
+    if np.sum(affine[0:3, 3] - newaffine[0:3, 3]) > 0.00001:
+        _save_data_to_img(image, data, affine)
+        #process of mask(s)
+        move_vector = newaffine[:3, 3] - affine[:3, 3]
+        for mask in masks:
+            mdata, maffine = _load_image(mask)
+            maffine[:3, 3] = maffine[:3, 3] + move_vector
+            mdata = mdata.astype(np.int8)
+            _save_data_to_img(mask, mdata, maffine)
+    else:
+        print(f"Center of Mass of {image} is already in origin.")
 
 def _find_executable(name):
     """ Try to find a executables by name.
