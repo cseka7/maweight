@@ -283,7 +283,9 @@ class LinearRegression_Objective(ModelSelectionObjectiveMixin):
                         disable_feature_selection, random_state, cache_path, verbosity)
     
     def get_default_parameter_space(self):
-        params_ml= ParameterSpace({'fit_intercept': UniformIntegerParameter(0, 1, random_state=self._random_state_init)}, random_state=self._random_state_init)
+        params_ml= ParameterSpace({'fit_intercept': FixedParameter(True)}) #UniformIntegerParameter(0, 1, random_state=self._random_state_init)},
+                                   #{'random_state': FixedParameter(5)},
+                                   #random_state=self._random_state_init)
         params= JointParameterSpace({'ml': params_ml, 'features': super().get_default_parameter_space()})
         return params
 

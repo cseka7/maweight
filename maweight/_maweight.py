@@ -38,7 +38,7 @@ from scipy.ndimage import center_of_mass
 import warnings
 
 # for model selection
-from sklearn.model_selection import RepeatedKFold
+from sklearn.model_selection import RepeatedKFold, LeaveOneOut
 from sklearn.metrics import r2_score
 from maweight.mltoolkit.automl import R2_score, RMSE_score
 from maweight.mltoolkit.optimization import SimulatedAnnealing, UniformIntegerParameter, ParameterSpace, BinaryVectorParameter
@@ -57,7 +57,7 @@ def _save_data_to_img(name, data, affine):
 
 def origin_to_center_of_mass(image, masks=[], threshold = 0):
     """ Set origin to image center of mass.
-        If necessary, we also move the given the mask(s) to keep them overlapping with the image.
+        If necessary, we also move the given mask(s) to keep them overlapping with the image.
     Args:
         image(str): image path
         threshold: set threshold value, image values under threshold values are not included in the center of mass calculation
@@ -67,17 +67,19 @@ def origin_to_center_of_mass(image, masks=[], threshold = 0):
 
     data, affine = _load_image(image)
     data = data.astype(np.int16)
+    newdata = deepcopy(data)
+    newdata[newdata < threshold] = 0
     # test non diagonal elements
     size = len(affine)-1
     off_dia_sum = sum([abs(affine[i][j]) for i in range(size) for j in range(size) if i != j])
-    if off_dia_sum > 0.00001:
+    if off_dia_sum > 0.0001:
         warnings.warn("The image appears to contain rotation. Moving the center of mass of the image to the origin works perfectly only on images without rotation.")
 
-    com = np.array(center_of_mass(deepcopy(data)))
+    com = np.array(center_of_mass(newdata))
     newaffine = deepcopy(affine)
     newaffine[0:3, 3] = -com * np.sum(affine[0:3, 0:3], axis=0)
-    if np.sum(affine[0:3, 3] - newaffine[0:3, 3]) > 0.00001:
-        _save_data_to_img(image, data, affine)
+    if np.sum(np.absolute(affine[0:3, 3] - newaffine[0:3, 3])) > 0.0001:
+        _save_data_to_img(image, data, newaffine)
         #process of mask(s)
         move_vector = newaffine[:3, 3] - affine[:3, 3]
         for mask in masks:
@@ -582,8 +584,12 @@ def model_selection(features,
                         PLSRegression_Objective],
             dataset=None,
             type=None,
+            validator=None,
             disable_feature_selection=False):
     all_results= []
+
+    if validator is None:
+        validator= RepeatedKFold(n_splits=10, n_repeats=20, random_state=21)
 
     for o in objectives:
         print("Objective {}:".format(o.__name__))
@@ -608,7 +614,7 @@ def model_selection(features,
         
         print("Number of used features: {}\nUsed features: {} \nScore: {}".format(len(used_features), used_features, best["score"]))
         for i in [1]:
-            tmp= ms.evaluate(n_estimators=i, score_functions=[R2_score(), RMSE_score()], validator= RepeatedKFold(n_splits=10, n_repeats=20, random_state=21))
+            tmp= ms.evaluate(n_estimators=i, score_functions=[R2_score(), RMSE_score()], validator= validator)
             results['r2_' + str(i)]= tmp['scores'][0]
             results['rmse_' + str(i)]= tmp['scores'][1]
             results['y_test_' + str(i)]= tmp['y_test']
