@@ -301,6 +301,8 @@ def register_and_transform(moving,
                            elastix_path= None, 
                            transformix_path= None,
                            registered_image_path= None,
+                           moving_mask= None,
+                           fixed_mask= None,
                            verbose= 1):
     """
     Registers and transforms images.
@@ -412,6 +414,10 @@ def register_and_transform(moving,
               params_file,
               '-threads',
               str(threads)]
+    if moving_mask:
+        command += ["-mMask", moving_mask]
+    if fixed_mask:
+        command += ["-fMask", fixed_mask]
 
     if verbose > 2: print('Executing the registration')
     
