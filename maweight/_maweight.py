@@ -14,6 +14,7 @@ __all__= ['executable_version',
 
 # to call OS services
 import sys
+import os
 # to work with filenames
 import os.path
 # to call executables
@@ -55,40 +56,55 @@ def _save_data_to_img(name, data, affine):
     img = nib.Nifti1Image(data, affine)
     nib.save(img, name)
 
-def origin_to_center_of_mass(image, masks=[], threshold = 0):
-    """ Set origin to image center of mass.
-        If necessary, we also move the given mask(s) to keep them overlapping with the image.
-    Args:
-        image(str): image path
-        threshold: set threshold value, image values under threshold values are not included in the center of mass calculation
-        masks(list): path of the masks
-    """
+def origin_to_center_of_mass(image, masks=None, threshold=0):
+    """Set the image center of mass as the world-coordinate origin."""
+
+    if masks is None:
+        masks = []
+
     print(f"Processing image: {image} and masks: {masks}")
 
     data, affine = _load_image(image)
-    data = data.astype(np.int16)
-    newdata = deepcopy(data)
-    newdata[newdata < threshold] = 0
-    # test non diagonal elements
-    size = len(affine)-1
-    off_dia_sum = sum([abs(affine[i][j]) for i in range(size) for j in range(size) if i != j])
-    if off_dia_sum > 0.0001:
-        warnings.warn("The image appears to contain rotation. Moving the center of mass of the image to the origin works perfectly only on images without rotation.")
 
-    com = np.array(center_of_mass(newdata))
-    newaffine = deepcopy(affine)
-    newaffine[0:3, 3] = -com * np.sum(affine[0:3, 0:3], axis=0)
-    if np.sum(np.absolute(affine[0:3, 3] - newaffine[0:3, 3])) > 0.0001:
+    # A számításhoz célszerű lebegőpontos típust használni.
+    calculation_data = np.asarray(data, dtype=np.float64).copy()
+    calculation_data[calculation_data < threshold] = 0
+
+    linear = affine[:3, :3]
+
+    off_diagonal = linear - np.diag(np.diag(linear))
+    if np.sum(np.abs(off_diagonal)) > 0.0001:
+        warnings.warn(
+            "The image affine contains rotation, axis permutation, or shear. "
+            "The full affine matrix will be used."
+        )
+
+    com = np.asarray(center_of_mass(calculation_data), dtype=np.float64)
+
+    if not np.all(np.isfinite(com)):
+        raise ValueError(
+            "Center of mass could not be calculated. "
+            "No nonzero image mass remains after thresholding."
+        )
+
+    newaffine = affine.copy()
+    newaffine[:3, 3] = -(linear @ com)
+
+    move_vector = newaffine[:3, 3] - affine[:3, 3]
+
+    if np.sum(np.abs(move_vector)) > 0.0001:
         _save_data_to_img(image, data, newaffine)
-        #process of mask(s)
-        move_vector = newaffine[:3, 3] - affine[:3, 3]
+
         for mask in masks:
             mdata, maffine = _load_image(mask)
-            maffine[:3, 3] = maffine[:3, 3] + move_vector
-            mdata = mdata.astype(np.int8)
-            _save_data_to_img(mask, mdata, maffine)
+            new_mask_affine = maffine.copy()
+            new_mask_affine[:3, 3] += move_vector
+
+            # Ne változtassuk meg szükségtelenül a maszk adattípusát.
+            _save_data_to_img(mask, mdata, new_mask_affine)
     else:
-        print(f"Center of Mass of {image} is already in origin.")
+        print(f"Center of Mass of {image} is already at the origin.")
+
 
 def _find_executable(name):
     """ Try to find a executables by name.
@@ -585,11 +601,34 @@ def model_selection(features,
             dataset=None,
             type=None,
             validator=None,
-            disable_feature_selection=False):
+            disable_feature_selection=False,
+            required_features=None,
+            random_state=None):
+
     all_results= []
 
     if validator is None:
-        validator= RepeatedKFold(n_splits=10, n_repeats=20, random_state=21)
+        validator= RepeatedKFold(n_splits=10, n_repeats=20, random_state=random_state)
+
+    if required_features is None:
+        required_feature_indices = []
+    else:
+        missing_features = [
+            name for name in required_features
+            if name not in features.columns
+        ]
+
+        if missing_features:
+            raise ValueError(
+                "Variable not found: {}".format(
+                    missing_features
+                )
+            )
+
+        required_feature_indices = [
+            features.columns.get_loc(name)
+            for name in required_features
+        ]
 
     for o in objectives:
         print("Objective {}:".format(o.__name__))
@@ -601,9 +640,11 @@ def model_selection(features,
                             score_functions=[NegR2_score()], 
                             preprocessor=StandardScaler(), 
                             optimizer=SimulatedAnnealing(verbosity=0,
-                                                            random_state=11),
-                            random_state=11,
-                            disable_feature_selection=disable_feature_selection)
+                                                            random_state=random_state),
+                            random_state=random_state,
+                            disable_feature_selection=disable_feature_selection,
+                            required_feature_indices=required_feature_indices,
+                            threads=threads)
         results['model_selection_score']= ms.select()['score']
         results['features']= list(features.columns[ms.get_best_model()["features"]])
         results['parameters']= ms.get_best_model()['model'].regressor.get_params()
@@ -642,4 +683,3 @@ if _maweight_executables['transformix'] == None:
     print('transformix executable not found, please pass its path to register_and_transform function')
 if _maweight_executables['elastix'] and _maweight_executables['transformix']:
     print('Executables being used: %s %s' % (_maweight_executables['elastix'], _maweight_executables['transformix']))
-

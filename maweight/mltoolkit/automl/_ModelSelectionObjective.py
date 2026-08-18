@@ -466,7 +466,15 @@ class ModelSelectionObjectiveMixin(RandomStateMixin, CacheBase, VerboseLoggingMi
             float, np.array: the validation score and the mean forecasts on the training set
         """
 
+
         self.verbose_logging(2, "scoring %s" % str(parameters))
+
+        required_indices = getattr(self, "required_feature_indices", [])
+        if required_indices:
+            parameters["features"] = (
+                parameters["features"].copy()
+            )
+            parameters["features"][required_indices] = True
         
         parameters_string= ParameterSpace.jsonify(parameters)
 
